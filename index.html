@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flight Tracker</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.1.1/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <style>
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        .custom-cluster-icon {
+            background-image: url('/static/plane.png');
+            background-size: cover;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+    <script>
+        let map, flightLayer, planeIcon, markers;
+
+        // Initialize map and set up initial data load
+        document.addEventListener('DOMContentLoaded', function() {
+            map = L.map('map').setView([48.8566, 2.3522], 5); // Initial map center at Paris
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+
+            flightLayer = L.layerGroup().addTo(map);
+
+            // Load the plane icon once
+            planeIcon = L.icon({
+                iconUrl: '/static/plane.png',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16],
+                popupAnchor: [0, -16]
+            });
+
+            markers = L.markerClusterGroup({
+                maxClusterRadius: 40, // Only cluster markers that are within 40 pixels of each other
+                iconCreateFunction: function(cluster) {
+                    // Set the icon size dynamically based on zoom level
+                    let clusterSize = map.getZoom() < 10 ? 24 : 32;
+                    let size = clusterSize + 'px';
+                    return L.divIcon({
+                        html: `<div style="width:${size}; height:${size}; background-image:url('/static/plane.png'); background-size: cover;"></div>`,
+                        className: 'custom-cluster-icon',
+                        iconSize: [clusterSize, clusterSize],
+                    });
+                },
+                zoomToBoundsOnClick: true, // Zoom into the cluster bounds when clicked
+                spiderfyOnMaxZoom: false, // Disable the spiderfy effect when the cluster is clicked
+                disableClusteringAtZoom: 12 // Disable clustering when zoomed in sufficiently
+            });
+            map.addLayer(markers);
+
+            // Fetch initial flight data and update the map
+            fetchAndUpdateMap();
+
+            // Refresh the map every 30 seconds with new data
+            setInterval(fetchAndUpdateMap, 30000);
+
+            // Adjust cluster size on zoom change
+            map.on('zoomend', function() {
+                markers.refreshClusters();
+            });
+        });
+
+        function fetchAndUpdateMap() {
+            fetch('/get_flights', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `min_lat=-90&max_lat=90&min_lon=-180&max_lon=180`
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Server error ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                updateFlightsOnMap(data);
+            })
+            .catch(error => {
+                console.error('Error fetching flight data:', error);
+            });
+        }
+
+        // Function to update flights on the map
+        function updateFlightsOnMap(flights) {
+            markers.clearLayers();
+
+            if (flights.length === 0) {
+                console.warn('No flights received.');
+                return;
+            }
+
+            flights.forEach(flight => {
+                if (flight.lat && flight.lon) {
+                    let marker = L.marker([flight.lat, flight.lon], {
+                        icon: planeIcon,
+                        rotationAngle: flight.track, // Rotate the icon by the heading angle
+                        className: 'rotate'  // Add a custom class for rotation
+                    }).bindPopup(`ICAO: ${flight.icao}<br>Flight: ${flight.callsign}<br>Altitude: ${flight.altitude} ft<br>Speed: ${flight.speed} kts`);
+                    
+                    marker.on('add', function () {
+                        let icon = this.getElement();
+                        icon.style.transform += ` rotate(${flight.track}deg)`;
+                    });
+
+                    markers.addLayer(marker);
+                } else {
+                    console.warn(`Invalid flight data: ${JSON.stringify(flight)}`);
+                }
+            });
+        }
+    </script>
+</body>
+</html>
