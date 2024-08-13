@@ -1,7 +1,7 @@
 from flask import Flask, send_from_directory, jsonify, request
 import requests
 from flask_caching import Cache
-from threading import Thread
+from threading import Thread, Event
 import time
 import os
 
@@ -14,8 +14,10 @@ cache = Cache(app, config={'CACHE_TYPE': 'simple'})
 RAPIDAPI_KEY = 'df9adb206dmsh555d4817e595b82p1b6168jsn37ba641eff85'
 RAPIDAPI_HOST = 'adsbexchange-com1.p.rapidapi.com'
 
-# Global variable to track active clients
+# Global variables to store the latest flight data and manage client connections
+latest_flight_data = []
 active_clients = 0
+stop_event = Event()
 
 def fetch_flight_data():
     url = f"https://{RAPIDAPI_HOST}/v2/lat/0/lon/0/dist/5000/"
@@ -47,30 +49,36 @@ def fetch_flight_data():
 
     return flights
 
-# Cache the flight data every 30 seconds
-@cache.cached(timeout=30, key_prefix='all_flights')
-def get_cached_flight_data():
-    return fetch_flight_data()
-
 def cache_flight_data_periodically():
-    while True:
-        global active_clients
-        if active_clients > 0:
-            with app.app_context():
-                get_cached_flight_data()
+    global latest_flight_data
+    while not stop_event.is_set():
+        with app.app_context():
+            latest_flight_data = fetch_flight_data()
         time.sleep(30)
 
 @app.before_request
 def before_request():
     global active_clients
+    global stop_event
+
     if request.endpoint == 'get_flights':
         active_clients += 1
+        if active_clients == 1:
+            stop_event.clear()
+            # Start the background thread to periodically cache flight data
+            cache_thread = Thread(target=cache_flight_data_periodically)
+            cache_thread.daemon = True
+            cache_thread.start()
 
 @app.after_request
 def after_request(response):
     global active_clients
+    global stop_event
+
     if request.endpoint == 'get_flights':
         active_clients -= 1
+        if active_clients == 0:
+            stop_event.set()  # Stop the background thread when no clients are connected
     return response
 
 @app.route('/')
@@ -80,7 +88,7 @@ def index():
 
 @app.route('/get_flights', methods=['POST'])
 def get_flights():
-    flights = get_cached_flight_data()
+    global latest_flight_data
 
     # Get the bounding box from the client
     min_lat = float(request.form['min_lat'])
@@ -90,16 +98,11 @@ def get_flights():
 
     # Filter flights based on bounding box
     filtered_flights = [
-        flight for flight in flights
+        flight for flight in latest_flight_data
         if min_lat <= flight['lat'] <= max_lat and min_lon <= flight['lon'] <= max_lon
     ]
 
     return jsonify(filtered_flights)
 
 if __name__ == '__main__':
-    # Start the background thread to periodically cache flight data
-    cache_thread = Thread(target=cache_flight_data_periodically)
-    cache_thread.daemon = True
-    cache_thread.start()
-
     app.run(debug=True)
