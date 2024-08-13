@@ -65,14 +65,6 @@ def cache_flight_data_periodically():
             logging.info("Cache updated.")
         time.sleep(30)
 
-@app.before_first_request
-def start_fetching_thread():
-    logging.info("Starting the data fetching thread.")
-    stop_event.clear()
-    fetch_thread = Thread(target=cache_flight_data_periodically)
-    fetch_thread.daemon = True
-    fetch_thread.start()
-
 @app.route('/')
 def index():
     # Serve the index.html from the root folder
@@ -100,4 +92,10 @@ def get_flights():
     return jsonify(filtered_flights)
 
 if __name__ == '__main__':
+    logging.info("Starting the data fetching thread.")
+    stop_event.clear()
+    fetch_thread = Thread(target=cache_flight_data_periodically)
+    fetch_thread.daemon = True
+    fetch_thread.start()
+
     app.run(debug=True)
