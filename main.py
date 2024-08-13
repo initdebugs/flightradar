@@ -5,7 +5,7 @@ from threading import Thread
 import time
 import os
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static')
 
 # Configure Flask-Caching
 cache = Cache(app, config={'CACHE_TYPE': 'simple'})
