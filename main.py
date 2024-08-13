@@ -1,7 +1,7 @@
 from flask import Flask, send_from_directory, jsonify, request
 import requests
 from flask_caching import Cache
-from threading import Thread, Event
+from threading import Thread, Event, Lock
 import time
 import os
 import logging
@@ -22,6 +22,8 @@ RAPIDAPI_HOST = 'adsbexchange-com1.p.rapidapi.com'
 latest_flight_data = []
 active_clients = 0
 stop_event = Event()
+fetch_thread = None
+thread_lock = Lock()
 
 def fetch_flight_data():
     logging.info("Fetching flight data from API...")
@@ -57,28 +59,34 @@ def fetch_flight_data():
 
 def cache_flight_data_periodically():
     global latest_flight_data
-    while not stop_event.is_set():
-        logging.info("Updating flight data cache...")
-        with app.app_context():
-            latest_flight_data = fetch_flight_data()
-        logging.info("Cache updated. Sleeping for 30 seconds.")
-        time.sleep(30)
+    while True:
+        with thread_lock:
+            if stop_event.is_set() and active_clients == 0:
+                logging.info("No active clients and stop event is set. Stopping the data fetch thread.")
+                break
+            if active_clients > 0:
+                logging.info("Updating flight data cache...")
+                with app.app_context():
+                    latest_flight_data = fetch_flight_data()
+                logging.info("Cache updated.")
+        stop_event.wait(30)  # This allows for early stopping if no clients are connected
 
 @app.before_request
 def before_request():
     global active_clients
+    global fetch_thread
     global stop_event
 
     if request.endpoint == 'get_flights':
-        active_clients += 1
-        logging.info(f"Client connected. Active clients: {active_clients}")
-        if active_clients == 1:
-            stop_event.clear()
-            logging.info("First client connected, starting data fetch thread.")
-            # Start the background thread to periodically cache flight data
-            cache_thread = Thread(target=cache_flight_data_periodically)
-            cache_thread.daemon = True
-            cache_thread.start()
+        with thread_lock:
+            active_clients += 1
+            logging.info(f"Client connected. Active clients: {active_clients}")
+            if fetch_thread is None or not fetch_thread.is_alive():
+                stop_event.clear()
+                logging.info("Starting data fetch thread.")
+                fetch_thread = Thread(target=cache_flight_data_periodically)
+                fetch_thread.daemon = True
+                fetch_thread.start()
 
 @app.after_request
 def after_request(response):
@@ -86,11 +94,12 @@ def after_request(response):
     global stop_event
 
     if request.endpoint == 'get_flights':
-        active_clients -= 1
-        logging.info(f"Client disconnected. Active clients: {active_clients}")
-        if active_clients == 0:
-            logging.info("No active clients, stopping data fetch thread.")
-            stop_event.set()  # Stop the background thread when no clients are connected
+        with thread_lock:
+            active_clients -= 1
+            logging.info(f"Client disconnected. Active clients: {active_clients}")
+            if active_clients == 0:
+                logging.info("No active clients, setting stop event to stop the thread after current cycle.")
+                stop_event.set()
     return response
 
 @app.route('/')
