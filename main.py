@@ -14,6 +14,9 @@ cache = Cache(app, config={'CACHE_TYPE': 'simple'})
 RAPIDAPI_KEY = 'df9adb206dmsh555d4817e595b82p1b6168jsn37ba641eff85'
 RAPIDAPI_HOST = 'adsbexchange-com1.p.rapidapi.com'
 
+# Global variable to track active clients
+active_clients = 0
+
 def fetch_flight_data():
     url = f"https://{RAPIDAPI_HOST}/v2/lat/0/lon/0/dist/5000/"
     headers = {
@@ -51,9 +54,24 @@ def get_cached_flight_data():
 
 def cache_flight_data_periodically():
     while True:
-        with app.app_context():
-            get_cached_flight_data()
+        global active_clients
+        if active_clients > 0:
+            with app.app_context():
+                get_cached_flight_data()
         time.sleep(30)
+
+@app.before_request
+def before_request():
+    global active_clients
+    if request.endpoint == 'get_flights':
+        active_clients += 1
+
+@app.after_request
+def after_request(response):
+    global active_clients
+    if request.endpoint == 'get_flights':
+        active_clients -= 1
+    return response
 
 @app.route('/')
 def index():
